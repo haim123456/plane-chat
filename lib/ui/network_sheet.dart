@@ -55,7 +55,7 @@ class NetworkCard extends StatelessWidget {
           Text('הרשת פתוחה', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: cs.onPrimaryContainer)),
         ]),
         const SizedBox(height: 6),
-        Text('באייפון: הגדרות, Wi-Fi, בוחרים את הרשת הזאת ומקלידים את הסיסמה. אחר כך פותחים את צ\'אט טיסה.',
+        Text('באייפון: הגדרות, Wi‑Fi, בוחרים את הרשת הזאת ומקלידים את הסיסמה. אחר כך פותחים את צ\'אט טיסה.',
             style: TextStyle(color: cs.onPrimaryContainer)),
         field('שם הרשת', info.ssid),
         field('סיסמה', info.passphrase),

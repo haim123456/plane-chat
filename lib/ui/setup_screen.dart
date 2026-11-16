@@ -69,14 +69,14 @@ class _SetupScreenState extends State<SetupScreen> {
                 selected: _role == 'host',
                 icon: Icons.wifi_tethering_rounded,
                 title: 'יוצר את הרשת',
-                subtitle: 'הטלפון הזה (אנדרואיד) פותח רשת Wi-Fi קטנה, והטלפון השני מצטרף אליה.',
+                subtitle: 'הטלפון הזה (אנדרואיד) פותח רשת Wi‑Fi קטנה, והטלפון השני מצטרף אליה.',
                 onTap: () => setState(() => _role = 'host'),
               ),
             _RoleCard(
               selected: _role == 'client',
               icon: Icons.wifi_rounded,
               title: 'מצטרף לרשת',
-              subtitle: 'קודם מתחברים בהגדרות ה־Wi-Fi לרשת שהטלפון השני מציג, ואז פותחים את הצ׳אט.',
+              subtitle: 'קודם מתחברים בהגדרות ה־Wi‑Fi לרשת שהטלפון השני מציג, ואז פותחים את הצ׳אט.',
               onTap: () => setState(() => _role = 'client'),
             ),
             if (_role == 'client') ...[

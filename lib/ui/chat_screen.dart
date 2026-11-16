@@ -100,8 +100,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         try {
           _group = await NativeBridge.startGroup(ssid, pass);
         } on WifiDirectError catch (e) {
+          // Keep the TCP server running anyway: it still works if both phones
+          // share another network (e.g. a regular hotspot as a fallback).
           setState(() => _hostError = _explain(e));
-          return;
         }
         await NativeBridge.startKeepAlive();
         await c.startLink(role: LinkRole.host);
@@ -120,11 +121,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   String _explain(WifiDirectError e) => switch (e.code) {
-        'WIFI_OFF' => 'ה־Wi-Fi כבוי. מדליקים Wi-Fi (גם במצב טיסה) ומנסים שוב.',
-        'P2P_UNSUPPORTED' || 'UNSUPPORTED' => 'הטלפון הזה לא תומך ב־Wi-Fi Direct.',
-        'BUSY' => 'ה־Wi-Fi עסוק כרגע. מנסים שוב בעוד כמה שניות.',
+        'WIFI_OFF' => 'ה־Wi‑Fi כבוי. מדליקים Wi‑Fi (גם במצב טיסה) ומנסים שוב.',
+        'P2P_UNSUPPORTED' || 'UNSUPPORTED' => 'הטלפון הזה לא תומך ב־Wi‑Fi Direct.',
+        'BUSY' => 'ה־Wi‑Fi עסוק כרגע. מנסים שוב בעוד כמה שניות.',
         'PERMISSION' => 'חסרה הרשאה. פותחים את הגדרות האפליקציה ומאשרים "מכשירים בקרבת מקום" או מיקום.',
-        _ => 'לא הצלחתי ליצור את הרשת (${e.code}). מכבים ומדליקים Wi-Fi ומנסים שוב.',
+        _ => 'לא הצלחתי ליצור את הרשת (${e.code}). מכבים ומדליקים Wi‑Fi ומנסים שוב.',
       };
 
   Future<void> _stopSession() async {
@@ -325,7 +326,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       listenable: c,
       builder: (context, _) {
         final msgs = c.messages.reversed.toList();
-        return Scaffold(
+        return PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop) NativeBridge.moveToBack();
+          },
+          child: Scaffold(
           appBar: AppBar(
             titleSpacing: 12,
             title: Row(children: [
@@ -381,6 +387,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             ),
             _composer(cs),
           ]),
+        ),
         );
       },
     );
@@ -499,7 +506,9 @@ class _StatusLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final (String label, Color color) = error != null
+    final (String label, Color color) = state == LinkState.connected
+        ? ('מחובר', const Color(0xFF2E7D32))
+        : error != null
         ? ('יש בעיה, ראו למטה', cs.error)
         : starting
             ? ('מפעיל...', cs.onSurfaceVariant)
@@ -529,7 +538,7 @@ class _JoinHint extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(color: cs.secondaryContainer, borderRadius: BorderRadius.circular(16)),
       child: Text(
-        'כדי להתחבר: בהגדרות ה־Wi-Fi של הטלפון הזה בוחרים את הרשת שמתחילה ב־DIRECT ומופיעה בטלפון השני, '
+        'כדי להתחבר: בהגדרות ה־Wi‑Fi של הטלפון הזה בוחרים את הרשת שמתחילה ב־DIRECT ומופיעה בטלפון השני, '
         'מקלידים את הסיסמה שמוצגת שם, וחוזרים לכאן. החיבור יקרה לבד.',
         style: TextStyle(color: cs.onSecondaryContainer),
       ),

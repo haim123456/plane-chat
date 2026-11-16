@@ -1,4 +1,4 @@
-// Thin wrappers over the Kotlin method channels. On iOS (later) the Wi-Fi
+// Thin wrappers over the Kotlin method channels. On iOS (later) the Wi‑Fi
 // Direct and keep-alive calls are simply unavailable: the iPhone is always the
 // client and joins the network from Settings.
 import 'dart:async';
@@ -36,7 +36,7 @@ class NativeBridge {
 
   static bool get canHost => Platform.isAndroid;
 
-  /// Fixed SSID "DIRECT-xy-TisaChat" (Wi-Fi Direct requires the DIRECT-xy prefix).
+  /// Fixed SSID "DIRECT-xy-TisaChat" (Wi‑Fi Direct requires the DIRECT-xy prefix).
   static String generateSsid() {
     const a = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     final r = Random.secure();
@@ -61,11 +61,11 @@ class NativeBridge {
       await Permission.notification.request();
     } else {
       final s = await Permission.locationWhenInUse.request();
-      if (!s.isGranted) return 'בגרסת האנדרואיד הזאת צריך לאשר הרשאת מיקום כדי ליצור רשת Wi-Fi Direct. האפליקציה לא משתמשת במיקום.';
+      if (!s.isGranted) return 'בגרסת האנדרואיד הזאת צריך לאשר הרשאת מיקום כדי ליצור רשת Wi‑Fi Direct. האפליקציה לא משתמשת במיקום.';
     }
     final st = await status();
-    if (st['p2pSupported'] == false) return 'הטלפון הזה לא תומך ב־Wi-Fi Direct.';
-    if (st['wifiEnabled'] == false) return 'צריך להדליק Wi-Fi (גם במצב טיסה אפשר).';
+    if (st['p2pSupported'] == false) return 'הטלפון הזה לא תומך ב־Wi‑Fi Direct.';
+    if (st['wifiEnabled'] == false) return 'צריך להדליק Wi‑Fi (גם במצב טיסה אפשר).';
     if (sdk < 33 && st['locationEnabled'] == false) {
       return 'בגרסת האנדרואיד הזאת צריך להדליק את שירותי המיקום בזמן יצירת הרשת.';
     }
@@ -98,6 +98,12 @@ class NativeBridge {
 
   static Future<void> stopKeepAlive() async {
     if (Platform.isAndroid) await _sys.invokeMethod('stopKeepAlive');
+  }
+
+  /// Back on the chat screen hides the app instead of closing it, so the
+  /// host keeps serving while the screen is off or another app is open.
+  static Future<void> moveToBack() async {
+    if (Platform.isAndroid) await _sys.invokeMethod('moveToBack');
   }
 
   static Future<void> notify(String title, String body) async {

@@ -60,6 +60,7 @@ class MainActivity : FlutterActivity() {
                 "sdkInt" -> result.success(Build.VERSION.SDK_INT)
                 "notify" -> { notifyIncoming(call.argument<String>("title") ?: "", call.argument<String>("body") ?: ""); result.success(null) }
                 "startKeepAlive" -> { KeepAliveService.start(this); result.success(null) }
+                "moveToBack" -> { moveTaskToBack(true); result.success(null) }
                 "stopKeepAlive" -> { KeepAliveService.stop(this); result.success(null) }
                 else -> result.notImplemented()
             }
@@ -238,6 +239,7 @@ class MainActivity : FlutterActivity() {
             FileOutputStream(out).use { bmp.compress(Bitmap.CompressFormat.JPEG, 72, it) }
             out.absolutePath
         } catch (e: Exception) {
+            android.util.Log.w("PlaneChat", "shared image failed: $uri", e)
             null
         }
     }

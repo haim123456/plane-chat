@@ -8,7 +8,7 @@ import 'dart:typed_data';
 
 const int kProtocolVersion = 1;
 const int kDefaultPort = 47474;
-const String kDefaultHostIp = '192.168.49.1'; // Android Wi-Fi Direct group owner
+const String kDefaultHostIp = '192.168.49.1'; // Android Wi‑Fi Direct group owner
 const int kMaxFrameBytes = 16 * 1024 * 1024;
 
 class ProtocolException implements Exception {

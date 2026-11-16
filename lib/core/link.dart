@@ -109,7 +109,7 @@ class ChatLink {
   }
 
   void _adopt(Socket s) {
-    // Host: a new connection replaces the old one (e.g. phone rejoined Wi-Fi).
+    // Host: a new connection replaces the old one (e.g. phone rejoined Wi‑Fi).
     _dropSocket(notify: false);
     s.setOption(SocketOption.tcpNoDelay, true);
     _socket = s;
@@ -208,7 +208,7 @@ class ChatLink {
     return _write(msg);
   }
 
-  /// Test hook: abruptly kill the current socket as if Wi-Fi dropped.
+  /// Test hook: abruptly kill the current socket as if Wi‑Fi dropped.
   void debugKillSocket() => _socket?.destroy();
 
   Future<void> stop() async {
