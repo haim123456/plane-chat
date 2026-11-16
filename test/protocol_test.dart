@@ -82,4 +82,18 @@ void main() {
   test('unknown kind falls back to text', () {
     expect(parseKind('sticker'), MsgKind.text);
   });
+
+  test('v2 frames: evt, typing, status, reply fields', () {
+    final frames = [
+      evtFrame(id: 'e1', ev: 'react', target: 'm1', emoji: '👍'),
+      typingFrame(true),
+      statusFrame(battery: 50, charging: true, seat: '12A'),
+      msgFrame(id: 'm2', kind: MsgKind.text, ts: 1, text: 'כן', replyTo: 'm1', replyPreview: 'שאלה', replyKind: 'text'),
+    ];
+    final out = FrameDecoder().add(frames.expand(encodeFrame).toList());
+    expect(out.map((f) => f['t']), ['evt', 'typing', 'status', 'msg']);
+    expect(out[0]['emoji'], '👍');
+    expect(out[2]['seat'], '12A');
+    expect(out[3]['replyText'], 'שאלה');
+  });
 }

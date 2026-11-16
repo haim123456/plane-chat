@@ -43,12 +43,13 @@ class NativeBridge {
     return 'DIRECT-${a[r.nextInt(a.length)]}${a[r.nextInt(a.length)]}-TisaChat';
   }
 
-  /// Easy to type on an iPhone: lowercase letters and digits, no look-alikes.
+  /// Easy to type on an iPhone: 8 digits only (WPA2 minimum length).
   static String generatePassphrase() {
-    const a = 'abcdefghjkmnpqrstuvwxyz23456789';
     final r = Random.secure();
-    return List.generate(10, (_) => a[r.nextInt(a.length)]).join();
+    return List.generate(8, (_) => r.nextInt(10).toString()).join();
   }
+
+  static bool isSimplePassphrase(String? p) => p != null && RegExp(r'^[0-9]{8}$').hasMatch(p);
 
   static Future<int> sdkInt() async => (await _sys.invokeMethod<int>('sdkInt')) ?? 0;
 
@@ -106,8 +107,20 @@ class NativeBridge {
     if (Platform.isAndroid) await _sys.invokeMethod('moveToBack');
   }
 
-  static Future<void> notify(String title, String body) async {
-    if (Platform.isAndroid) await _sys.invokeMethod('notify', {'title': title, 'body': body});
+  /// Strong buzz for a nudge. Android: vibration pattern; iOS: haptics.
+  static Future<void> buzz() async {
+    if (Platform.isAndroid) {
+      await _sys.invokeMethod('vibrate');
+    } else {
+      for (var i = 0; i < 3; i++) {
+        await HapticFeedback.heavyImpact();
+        await Future.delayed(const Duration(milliseconds: 220));
+      }
+    }
+  }
+
+  static Future<void> notify(String title, String body, {int id = 1001}) async {
+    if (Platform.isAndroid) await _sys.invokeMethod('notify', {'title': title, 'body': body, 'id': id});
   }
 
   // Share target

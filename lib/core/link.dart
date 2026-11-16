@@ -39,11 +39,15 @@ class ChatLink {
   final _messages = StreamController<Map<String, dynamic>>.broadcast();
   final _acks = StreamController<String>.broadcast();
   final _peers = StreamController<String>.broadcast();
+  final _others = StreamController<Map<String, dynamic>>.broadcast();
+
+  /// Ephemeral frames that are not acked or queued (typing, status).
+  Stream<Map<String, dynamic>> get others => _others.stream;
 
   /// Connection state changes.
   Stream<LinkState> get states => _state.stream;
 
-  /// Incoming 'msg' frames (already acked automatically).
+  /// Incoming 'msg' and 'evt' frames (already acked automatically).
   Stream<Map<String, dynamic>> get messages => _messages.stream;
 
   /// Ids of our messages that the peer confirmed.
@@ -154,6 +158,7 @@ class ChatLink {
           if (peerName != null) _peers.add(peerName!);
           break;
         case 'msg':
+        case 'evt':
           final id = f['id'];
           if (id is String) {
             _write(ackFrame(id));
@@ -167,7 +172,11 @@ class ChatLink {
         case 'ping':
           _write(pongFrame());
           break;
+        case 'pong':
+          break;
         default:
+          // Ephemeral frames (typing, status) and future types.
+          if (!_others.isClosed) _others.add(f);
           break;
       }
     }
@@ -208,6 +217,9 @@ class ChatLink {
     return _write(msg);
   }
 
+  /// Fire-and-forget frame (typing, status). Dropped when offline.
+  bool sendEphemeral(Map<String, dynamic> f) => _write(f);
+
   /// Test hook: abruptly kill the current socket as if Wi‑Fi dropped.
   void debugKillSocket() => _socket?.destroy();
 
@@ -225,5 +237,6 @@ class ChatLink {
     await _messages.close();
     await _acks.close();
     await _peers.close();
+    await _others.close();
   }
 }

@@ -1,6 +1,8 @@
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'package:qr_flutter/qr_flutter.dart';
+
 import '../platform/native.dart';
 
 /// Big, easy-to-copy network name and password for the iPhone user.
@@ -55,8 +57,20 @@ class NetworkCard extends StatelessWidget {
           Text('הרשת פתוחה', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: cs.onPrimaryContainer)),
         ]),
         const SizedBox(height: 6),
-        Text('באייפון: הגדרות, Wi‑Fi, בוחרים את הרשת הזאת ומקלידים את הסיסמה. אחר כך פותחים את צ\'אט טיסה.',
+        Text('באייפון: פותחים את המצלמה, מכוונים לקוד ולוחצים על ההודעה שקופצת. אפשר גם להיכנס להגדרות, ל־Wi‑Fi, ולהקליד את הסיסמה. אחר כך פותחים את צ\'אט טיסה.',
             style: TextStyle(color: cs.onPrimaryContainer)),
+        const SizedBox(height: 10),
+        Center(
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+            child: QrImageView(
+              data: 'WIFI:T:WPA;S:${info.ssid};P:${info.passphrase};;',
+              size: compact ? 170 : 220,
+              backgroundColor: Colors.white,
+            ),
+          ),
+        ),
         field('שם הרשת', info.ssid),
         field('סיסמה', info.passphrase),
       ]),

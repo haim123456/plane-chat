@@ -31,11 +31,29 @@ Future<void> main(List<String> args) async {
     await Future.delayed(const Duration(milliseconds: 100));
   }
   print('acked=${acked.length}/3 in ${sw.elapsedMilliseconds}ms peer=${link.peerName}');
+  final others = <Map<String, dynamic>>[];
+  link.others.listen(others.add);
+  // v2: status, typing, reply, reaction, nudge
+  link.sendEphemeral(statusFrame(battery: 17, charging: false, seat: '31F'));
+  link.sendEphemeral(typingFrame(true));
+  await Future.delayed(const Duration(seconds: 2));
+  link.send(msgFrame(id: 'e2e-reply-$now', kind: MsgKind.text, ts: now + 3, text: 'כן, פסטה',
+      replyTo: 'e2e-text-$now', replyPreview: 'שלום מהבדיקה ✈️', replyKind: 'text'));
+  link.send(evtFrame(id: 'e2e-react-$now', ev: 'react', target: 'e2e-text-$now', emoji: '❤️'));
+  link.send(evtFrame(id: 'e2e-nudge-$now', ev: 'nudge', ts: DateTime.now().millisecondsSinceEpoch));
+  sw.reset();
+  while (acked.length < 6 && sw.elapsed.inSeconds < 10) {
+    await Future.delayed(const Duration(milliseconds: 100));
+  }
+  print('v2 acked=${acked.length}/6');
   print('waiting 25s for messages typed on the device...');
   await Future.delayed(Duration(seconds: args.length > 4 ? int.parse(args[4]) : 25));
+  for (final o in others) {
+    print('ephemeral ${o['t']}: $o');
+  }
   for (final m in got) {
-    print('received kind=${m['kind']} text=${m['text']} bytes=${frameData(m)?.length}');
+    print('received ${m['t']} kind=${m['kind']} ev=${m['ev']} text=${m['text']} reply=${m['replyText']} emoji=${m['emoji']} bytes=${frameData(m)?.length}');
   }
   await link.dispose();
-  exit(acked.length == 3 ? 0 : 1);
+  exit(acked.length == 6 ? 0 : 1);
 }

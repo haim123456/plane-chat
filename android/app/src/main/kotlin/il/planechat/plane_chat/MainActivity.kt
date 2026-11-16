@@ -58,8 +58,9 @@ class MainActivity : FlutterActivity() {
         MethodChannel(messenger, "plane_chat/system").setMethodCallHandler { call, result ->
             when (call.method) {
                 "sdkInt" -> result.success(Build.VERSION.SDK_INT)
-                "notify" -> { notifyIncoming(call.argument<String>("title") ?: "", call.argument<String>("body") ?: ""); result.success(null) }
+                "notify" -> { notifyIncoming(call.argument<String>("title") ?: "", call.argument<String>("body") ?: "", call.argument<Int>("id") ?: 1001); result.success(null) }
                 "startKeepAlive" -> { KeepAliveService.start(this); result.success(null) }
+                "vibrate" -> { vibratePattern(); result.success(null) }
                 "moveToBack" -> { moveTaskToBack(true); result.success(null) }
                 "stopKeepAlive" -> { KeepAliveService.stop(this); result.success(null) }
                 else -> result.notImplemented()
@@ -244,9 +245,26 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // ---------------- Nudge vibration ----------------
+
+    private fun vibratePattern() {
+        val pattern = longArrayOf(0, 180, 90, 180, 90, 420)
+        try {
+            if (Build.VERSION.SDK_INT >= 31) {
+                val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager
+                vm.defaultVibrator.vibrate(android.os.VibrationEffect.createWaveform(pattern, -1))
+            } else {
+                @Suppress("DEPRECATION")
+                val v = getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+                if (Build.VERSION.SDK_INT >= 26) v.vibrate(android.os.VibrationEffect.createWaveform(pattern, -1))
+                else @Suppress("DEPRECATION") v.vibrate(pattern, -1)
+            }
+        } catch (_: Exception) {}
+    }
+
     // ---------------- Notifications ----------------
 
-    private fun notifyIncoming(title: String, body: String) {
+    private fun notifyIncoming(title: String, body: String, id: Int) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(NotificationChannel("messages", "הודעות", NotificationManager.IMPORTANCE_HIGH))
@@ -262,6 +280,6 @@ class MainActivity : FlutterActivity() {
             .setContentIntent(pi)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
-        try { nm.notify(1001, n) } catch (_: SecurityException) {}
+        try { nm.notify(id, n) } catch (_: SecurityException) {}
     }
 }

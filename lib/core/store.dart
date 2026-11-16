@@ -17,6 +17,11 @@ class ChatMessage {
     this.mediaPath,
     this.durationMs,
     this.status = MsgStatus.pending,
+    this.replyTo,
+    this.replyPreview,
+    this.replyKind,
+    this.myReaction,
+    this.peerReaction,
   });
 
   final String id;
@@ -27,6 +32,18 @@ class ChatMessage {
   final String? mediaPath;
   final int? durationMs;
   MsgStatus status;
+  final String? replyTo;
+  final String? replyPreview;
+  final String? replyKind;
+  String? myReaction;
+  String? peerReaction;
+
+  /// Short one-line description used for quotes, notifications and export.
+  String get preview => switch (kind) {
+        MsgKind.text => text ?? '',
+        MsgKind.image => text == null ? '📷 תמונה' : '📷 $text',
+        MsgKind.voice => '🎤 הודעה קולית',
+      };
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -37,6 +54,11 @@ class ChatMessage {
         if (mediaPath != null) 'media': mediaPath,
         if (durationMs != null) 'dur': durationMs,
         'st': status.name,
+        if (replyTo != null) 'reply': replyTo,
+        if (replyPreview != null) 'replyText': replyPreview,
+        if (replyKind != null) 'replyKind': replyKind,
+        if (myReaction != null) 'myR': myReaction,
+        if (peerReaction != null) 'peerR': peerReaction,
       };
 
   static ChatMessage fromJson(Map<String, dynamic> j) => ChatMessage(
@@ -49,6 +71,11 @@ class ChatMessage {
         durationMs: (j['dur'] as num?)?.toInt(),
         status: MsgStatus.values.firstWhere((s) => s.name == j['st'],
             orElse: () => MsgStatus.pending),
+        replyTo: j['reply'] as String?,
+        replyPreview: j['replyText'] as String?,
+        replyKind: j['replyKind'] as String?,
+        myReaction: j['myR'] as String?,
+        peerReaction: j['peerR'] as String?,
       );
 }
 
@@ -108,9 +135,17 @@ class ChatStore {
     return {};
   }
 
-  Future<void> saveSettings(Map<String, dynamic> s) async {
-    await dir.create(recursive: true);
-    await _settingsFile.writeAsString(jsonEncode(s), flush: true);
+  /// Serialized with history writes; errors are swallowed so a failed write
+  /// never blocks later ones.
+  Future<void> saveSettings(Map<String, dynamic> s) {
+    final data = jsonEncode(s);
+    _chain = _chain.then((_) async {
+      await dir.create(recursive: true);
+      final tmp = File('${_settingsFile.path}.tmp');
+      await tmp.writeAsString(data, flush: true);
+      await tmp.rename(_settingsFile.path);
+    }).catchError((Object e) {});
+    return _chain;
   }
 
   Future<void> clear() async {

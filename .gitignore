@@ -54,3 +54,4 @@ key.properties
 *.p12
 *.mobileprovision
 ios/Flutter/ephemeral/
+android/build/

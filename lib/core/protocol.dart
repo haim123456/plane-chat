@@ -2,7 +2,10 @@
 //
 // Every frame is: 4-byte big-endian payload length, then a UTF-8 JSON object.
 // Binary media travels base64-encoded inside the JSON ("data").
-// Frame types ("t"): hello, msg, ack, ping, pong.
+// Frame types ("t"):
+//   reliable (queued until acked): msg, evt (reaction, nudge)
+//   control: hello, ack, ping, pong
+//   ephemeral (dropped when offline): typing, status
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -83,6 +86,9 @@ Map<String, dynamic> msgFrame({
   List<int>? data,
   int? durationMs,
   String? sender,
+  String? replyTo,
+  String? replyPreview,
+  String? replyKind,
 }) =>
     {
       't': 'msg',
@@ -93,6 +99,35 @@ Map<String, dynamic> msgFrame({
       if (data != null) 'data': base64Encode(data),
       if (durationMs != null) 'dur': durationMs,
       if (sender != null) 'from': sender,
+      if (replyTo != null) 'reply': replyTo,
+      if (replyPreview != null) 'replyText': replyPreview,
+      if (replyKind != null) 'replyKind': replyKind,
+    };
+
+/// Reliable event. ev: 'react' (target + emoji, emoji '' = remove), 'nudge'.
+Map<String, dynamic> evtFrame({
+  required String id,
+  required String ev,
+  String? target,
+  String? emoji,
+  int? ts,
+}) =>
+    {
+      't': 'evt',
+      'id': id,
+      'ev': ev,
+      if (target != null) 'target': target,
+      if (emoji != null) 'emoji': emoji,
+      if (ts != null) 'ts': ts,
+    };
+
+Map<String, dynamic> typingFrame(bool on) => {'t': 'typing', 'on': on};
+
+Map<String, dynamic> statusFrame({int? battery, bool? charging, String? seat}) => {
+      't': 'status',
+      if (battery != null) 'battery': battery,
+      if (charging != null) 'charging': charging,
+      if (seat != null) 'seat': seat,
     };
 
 Map<String, dynamic> ackFrame(String id) => {'t': 'ack', 'id': id};
