@@ -91,6 +91,8 @@ void main() {
     final img = Uint8List.fromList(List.generate(200 * 1024, (i) => i % 253));
     final im = await host.sendImage(img, caption: 'חלון');
     await waitFor(() => t.status == MsgStatus.delivered && im.status == MsgStatus.delivered);
+    await waitFor(() => client.messages.any((m) => m.id == im.id && m.mediaPath != null) &&
+        host.messages.any((m) => m.id == t.id));
     final got = client.messages.firstWhere((m) => m.id == im.id);
     expect(await File(got.mediaPath!).readAsBytes(), img);
     expect(host.messages.where((m) => m.id == t.id), hasLength(1));
@@ -118,6 +120,7 @@ void main() {
     await waitFor(() => client.linkVia == 'nearby' && host.linkVia == 'nearby');
     final b = (await host.sendText('ממשיכים בבלוטות'))!;
     await waitFor(() => b.status == MsgStatus.delivered);
+    await waitFor(() => client.messages.any((m) => m.id == b.id) && host.messages.any((m) => m.id == a.id));
     expect(client.messages.where((m) => m.id == b.id), hasLength(1));
     expect(host.messages.where((m) => m.id == a.id), hasLength(1));
     await host.stopLink();
