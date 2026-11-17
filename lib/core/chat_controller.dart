@@ -147,7 +147,7 @@ class ChatController extends ChangeNotifier {
       linkState = s;
       if (s == LinkState.connected) {
         final h = l.connectedHost;
-        if (role == LinkRole.client && h != null && h != settings['lastHost']) {
+        if (role == LinkRole.client && l.activeKind == 'wifi' && h != null && h != settings['lastHost']) {
           updateSettings({'lastHost': h});
         }
         _markQueuedAsSent();
@@ -186,6 +186,25 @@ class ChatController extends ChangeNotifier {
 
   BeaconListener? _beaconListener;
   HostBeacon? _beacon;
+
+  /// 'wifi' or 'nearby' (Bluetooth) while connected, else null.
+  String? get linkVia => linkState == LinkState.connected ? link?.activeKind : null;
+
+  /// v4: a Bluetooth (Nearby Connections) link was established.
+  void adoptPipe(LinkPipe p) {
+    final l = link;
+    if (l == null) {
+      p.close();
+      return;
+    }
+    l.adoptPipe(p);
+    notifyListeners();
+  }
+
+  void pipeClosed(LinkPipe p) {
+    link?.pipeClosed(p);
+    notifyListeners();
+  }
 
   /// Client: how many discovery rounds failed in a row (for UI hints).
   int get failedAttempts => link?.failedAttempts ?? 0;

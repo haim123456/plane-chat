@@ -75,4 +75,6 @@ flutter {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
+    // v4: automatic Bluetooth link (Nearby Connections)
+    implementation("com.google.android.gms:play-services-nearby:19.5.1")
 }

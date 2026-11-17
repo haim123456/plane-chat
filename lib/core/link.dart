@@ -6,6 +6,52 @@ import 'dart:io';
 
 import 'protocol.dart';
 
+/// A byte pipe to the peer: a TCP socket, or a Nearby Connections link
+/// (Bluetooth / BLE, added in v4). Frames are the same on every pipe.
+abstract class LinkPipe {
+  /// Raw incoming bytes, in order. Completes when the pipe closes.
+  Stream<List<int>> get input;
+  void write(List<int> bytes);
+  void close();
+
+  /// Human label for the UI / logs ('wifi', 'nearby').
+  String get kind;
+
+  /// Peer address for TCP pipes (cached as lastHost), null otherwise.
+  String? get remoteHost;
+
+  /// Silence after which the link is considered dead. Slow pipes need more.
+  Duration? get deadAfter => null;
+}
+
+class SocketPipe implements LinkPipe {
+  SocketPipe(this.socket) {
+    try {
+      socket.setOption(SocketOption.tcpNoDelay, true);
+    } catch (_) {}
+  }
+  final Socket socket;
+  @override
+  Stream<List<int>> get input => socket;
+  @override
+  void write(List<int> bytes) => socket.add(bytes);
+  @override
+  void close() => socket.destroy();
+  @override
+  String get kind => 'wifi';
+  @override
+  String? get remoteHost {
+    try {
+      return socket.remoteAddress.address;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Duration? get deadAfter => null;
+}
+
 enum LinkRole { host, client }
 
 enum LinkState { stopped, waiting, connecting, connected }
@@ -29,8 +75,11 @@ class ChatLink {
   /// Returns a connected socket or null. When null is set, connects to [host].
   final Future<Socket?> Function()? finder;
 
-  /// Address of the peer of the current/last connection.
+  /// Address of the peer of the current/last TCP connection.
   String? connectedHost;
+
+  /// Kind of the active pipe ('wifi' / 'nearby'), null when offline.
+  String? get activeKind => _socket?.kind;
   int failedAttempts = 0;
 
   final LinkRole role;
@@ -70,8 +119,11 @@ class ChatLink {
   int? boundPort;
 
   ServerSocket? _server;
-  Socket? _socket;
-  FrameDecoder? _decoder;
+  LinkPipe? _socket; // active pipe: all writes go here
+  /// Live pipes that are not active (e.g. Bluetooth while Wi‑Fi is up).
+  /// Frames from them are still accepted; one is promoted if the active dies.
+  final List<LinkPipe> _standby = [];
+  final Map<LinkPipe, FrameDecoder> _decoders = {};
   Timer? _hbTimer;
   DateTime _lastRx = DateTime.now();
   bool _running = false;
@@ -96,7 +148,7 @@ class ChatLink {
           shared: true);
       boundPort = _server!.port;
       _setState(LinkState.waiting);
-      _server!.listen(_adopt, onError: (_) {});
+      _server!.listen((s) => _adopt(SocketPipe(s)), onError: (_) {});
     } else {
       unawaited(_clientLoop());
     }
@@ -104,7 +156,7 @@ class ChatLink {
 
   Future<void> _clientLoop() async {
     while (_running) {
-      if (_socket == null) {
+      if (_socket == null || (_socket!.kind != 'wifi' && wifiWhileOtherPipe)) {
         _setState(LinkState.connecting);
         try {
           final s = finder != null
@@ -116,33 +168,57 @@ class ChatLink {
             break;
           }
           failedAttempts = 0;
-          _adopt(s);
+          _adopt(SocketPipe(s));
         } catch (_) {
           failedAttempts++;
-          _setState(LinkState.waiting);
+          if (_socket == null) _setState(LinkState.waiting);
         }
       }
-      await Future.delayed(retryDelay);
+      await Future.delayed(_socket == null ? retryDelay : retryDelay * 4);
     }
   }
 
-  void _adopt(Socket s) {
-    // Host: a new connection replaces the old one (e.g. phone rejoined Wi‑Fi).
-    _dropSocket(notify: false);
-    s.setOption(SocketOption.tcpNoDelay, true);
+  /// Client: keep looking for a Wi‑Fi path while connected over another
+  /// pipe (Bluetooth), since Wi‑Fi is much faster.
+  bool wifiWhileOtherPipe = true;
+
+  /// Adopt an externally established pipe (Nearby Connections).
+  void adoptPipe(LinkPipe p) {
+    if (!_running) {
+      p.close();
+      return;
+    }
+    if (_socket != null && _socket!.kind == 'wifi' && p.kind != 'wifi') {
+      // Keep the faster Wi‑Fi active, hold Bluetooth as a standby path.
+      _listenPipe(p);
+      _standby.add(p);
+      _writeTo(p, helloFrame(deviceName, deviceId));
+      return;
+    }
+    _adopt(p);
+  }
+
+  /// The Nearby pipe [p] closed from the native side.
+  void pipeClosed(LinkPipe p) => _onClosed(p);
+
+  void _adopt(LinkPipe s) {
+    final old = _socket;
+    if (old != null) {
+      if (old.kind != 'wifi' && s.kind == 'wifi') {
+        // Faster path arrived: demote Bluetooth to standby, don't close it.
+        _socket = null;
+        _standby.add(old);
+      } else {
+        // Host: a new connection replaces the old one (phone rejoined Wi‑Fi).
+        _dropSocket(notify: false);
+      }
+    }
+    _standby.remove(s);
     _socket = s;
-    try {
-      connectedHost = s.remoteAddress.address;
-    } catch (_) {}
-    _decoder = FrameDecoder();
+    if (s.remoteHost != null) connectedHost = s.remoteHost;
     _lastRx = DateTime.now();
     _setState(LinkState.connected);
-    s.listen(
-      (chunk) => _onData(s, chunk),
-      onError: (_) => _onClosed(s),
-      onDone: () => _onClosed(s),
-      cancelOnError: true,
-    );
+    if (!_decoders.containsKey(s)) _listenPipe(s);
     _write(helloFrame(deviceName, deviceId));
     for (final f in _outbox.values.toList()) {
       _write(f);
@@ -150,7 +226,7 @@ class ChatLink {
     _hbTimer?.cancel();
     _hbTimer = Timer.periodic(heartbeat, (_) {
       if (_socket != s) return;
-      if (DateTime.now().difference(_lastRx) > deadAfter) {
+      if (DateTime.now().difference(_lastRx) > (s.deadAfter ?? deadAfter)) {
         _onClosed(s);
         return;
       }
@@ -158,12 +234,23 @@ class ChatLink {
     });
   }
 
-  void _onData(Socket s, List<int> chunk) {
-    if (_socket != s) return;
-    _lastRx = DateTime.now();
+  void _listenPipe(LinkPipe s) {
+    _decoders[s] = FrameDecoder();
+    s.input.listen(
+      (chunk) => _onData(s, chunk),
+      onError: (_) => _onClosed(s),
+      onDone: () => _onClosed(s),
+      cancelOnError: true,
+    );
+  }
+
+  void _onData(LinkPipe s, List<int> chunk) {
+    final dec = _decoders[s];
+    if (dec == null) return;
+    if (_socket == s) _lastRx = DateTime.now();
     List<Map<String, dynamic>> frames;
     try {
-      frames = _decoder!.add(chunk);
+      frames = dec.add(chunk);
     } catch (_) {
       _onClosed(s);
       return;
@@ -178,7 +265,7 @@ class ChatLink {
         case 'evt':
           final id = f['id'];
           if (id is String) {
-            _write(ackFrame(id));
+            if (!_write(ackFrame(id))) _writeTo(s, ackFrame(id));
             _messages.add(f);
           }
           break;
@@ -187,7 +274,7 @@ class ChatLink {
           if (id is String && _outbox.remove(id) != null) _acks.add(id);
           break;
         case 'ping':
-          _write(pongFrame());
+          _writeTo(s, pongFrame());
           break;
         case 'pong':
           break;
@@ -199,7 +286,12 @@ class ChatLink {
     }
   }
 
-  void _onClosed(Socket s) {
+  void _onClosed(LinkPipe s) {
+    if (_standby.remove(s)) {
+      _decoders.remove(s);
+      s.close();
+      return;
+    }
     if (_socket != s) return;
     _dropSocket(notify: true);
   }
@@ -209,22 +301,33 @@ class ChatLink {
     _hbTimer = null;
     final old = _socket;
     _socket = null;
-    _decoder = null;
-    old?.destroy();
+    if (old != null) {
+      _decoders.remove(old);
+      old.close();
+    }
+    // Fall back to a standby pipe (Bluetooth) if one is still alive.
+    if (notify && _running && _standby.isNotEmpty) {
+      _adopt(_standby.removeLast());
+      return;
+    }
     if (notify && _running) {
       _setState(role == LinkRole.host ? LinkState.waiting : LinkState.connecting);
+    }
+  }
+
+  bool _writeTo(LinkPipe p, Map<String, dynamic> f) {
+    try {
+      p.write(encodeFrame(f));
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
   bool _write(Map<String, dynamic> f) {
     final s = _socket;
     if (s == null) return false;
-    try {
-      s.add(encodeFrame(f));
-      return true;
-    } catch (_) {
-      return false;
-    }
+    return _writeTo(s, f);
   }
 
   /// Queue a 'msg' frame. Returns true if it was written to a live socket now.
@@ -238,11 +341,19 @@ class ChatLink {
   bool sendEphemeral(Map<String, dynamic> f) => _write(f);
 
   /// Test hook: abruptly kill the current socket as if Wi‑Fi dropped.
-  void debugKillSocket() => _socket?.destroy();
+  void debugKillSocket() {
+    final s = _socket;
+    if (s is SocketPipe) s.socket.destroy();
+  }
 
   Future<void> stop() async {
     _running = false;
     _dropSocket(notify: false);
+    for (final p in _standby) {
+      p.close();
+    }
+    _standby.clear();
+    _decoders.clear();
     await _server?.close();
     _server = null;
     _setState(LinkState.stopped);

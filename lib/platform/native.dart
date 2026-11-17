@@ -65,6 +65,21 @@ class NativeBridge {
 
   static Future<int> sdkInt() async => (await _sys.invokeMethod<int>('sdkInt')) ?? 0;
 
+  /// v4 Bluetooth link (Nearby Connections). On iOS the system asks for
+  /// Bluetooth by itself when the link starts. Returns true when granted.
+  static Future<bool> ensureNearbyPermissions() async {
+    if (!Platform.isAndroid) return true;
+    final sdk = await sdkInt();
+    final perms = <Permission>[
+      if (sdk >= 31) ...[Permission.bluetoothScan, Permission.bluetoothAdvertise, Permission.bluetoothConnect],
+      if (sdk >= 33) Permission.nearbyWifiDevices,
+      if (sdk <= 32) Permission.locationWhenInUse,
+    ];
+    if (perms.isEmpty) return true;
+    final r = await perms.request();
+    return r.values.every((s) => s.isGranted);
+  }
+
   /// Returns null when everything needed is granted, else a Hebrew explanation.
   static Future<String?> ensureHostPermissions() async {
     final sdk = await sdkInt();

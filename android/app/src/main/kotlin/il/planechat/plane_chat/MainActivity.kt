@@ -34,6 +34,7 @@ class MainActivity : FlutterActivity() {
     private var shareChannel: MethodChannel? = null
     private var pendingShare: Map<String, Any?>? = null
     private val main = Handler(Looper.getMainLooper())
+    private var nearby: NearbyBridge? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -66,6 +67,7 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        nearby = NearbyBridge(applicationContext, messenger)
         pendingShare = readShare(intent)
     }
 

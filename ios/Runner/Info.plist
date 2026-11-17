@@ -12,7 +12,12 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_planechat._tcp</string>
+		<string>_DA3C025F48D2._tcp</string>
 	</array>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>כדי למצוא את הטלפון השני ולהתחבר אליו לבד ב־Bluetooth, גם במצב טיסה</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>נדרש על ידי iOS לחיבורי Wi‑Fi ישירים. האפליקציה לא משתמשת במיקום</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>כדי להקליט הודעות קוליות</string>
 	<key>NSPhotoLibraryUsageDescription</key>

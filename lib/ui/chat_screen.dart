@@ -15,6 +15,7 @@ import '../core/link.dart';
 import '../core/protocol.dart';
 import '../core/store.dart';
 import '../platform/native.dart';
+import '../platform/nearby.dart';
 import 'bubbles.dart';
 import 'connect_help.dart';
 import 'network_sheet.dart';
@@ -186,6 +187,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
             host: (c.settings['hostIp'] as String?) ?? kDefaultHostIp,
             discover: true);
       }
+      try {
+        await _startNearby();
+      } catch (_) {}
     } catch (e) {
       setState(() => _hostError = 'שגיאה בהפעלה: $e');
     } finally {
@@ -263,6 +267,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
         chk = NetCheck(true, 'מחובר לרשת (\u2066${ips.first}\u2069). מחפש את הטלפון השני…$more');
       }
     }
+    final bt = _nearbyLine();
+    if (bt != null) chk = NetCheck(chk.ok || _nearby?.phase == NearbyPhase.searching, '$bt\n${chk.text}',
+        suggestHotspot: chk.suggestHotspot);
     _checkLive.value = chk;
     if (mounted) setState(() => _check = chk);
   }
@@ -285,7 +292,55 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
         _ => 'לא הצלחתי ליצור את הרשת (${e.code}). מכבים ומדליקים Wi‑Fi ומנסים שוב.',
       };
 
+  // v4: automatic Bluetooth link (Nearby Connections), runs next to Wi‑Fi.
+  NearbyService? _nearby;
+  StreamSubscription? _nearbySub;
+  bool get _nearbyOn => c.settings['nearby'] != false;
+
+  Future<void> _startNearby() async {
+    await _stopNearby();
+    if (!_nearbyOn || !NearbyService.supported) return;
+    await NativeBridge.ensureNearbyPermissions();
+    final n = NearbyService(deviceName: c.deviceName, deviceId: c.deviceId);
+    n.onPipe = c.adoptPipe;
+    n.onPipeClosed = c.pipeClosed;
+    _nearby = n;
+    _nearbySub = n.phases.listen((_) {
+      if (mounted) setState(() {});
+      unawaited(_selfCheck());
+    });
+    await n.start();
+  }
+
+  Future<void> _stopNearby() async {
+    await _nearbySub?.cancel();
+    _nearbySub = null;
+    final n = _nearby;
+    _nearby = null;
+    await n?.stop();
+  }
+
+  /// One Hebrew line about the Bluetooth path, for the status card.
+  String? _nearbyLine() {
+    final n = _nearby;
+    if (!_nearbyOn) return null;
+    if (n == null) return null;
+    final err = n.lastError ?? '';
+    return switch (n.phase) {
+      NearbyPhase.searching => 'Bluetooth: מחפש את הטלפון השני לבד (צריך שצ\'אט טיסה יהיה פתוח בשניהם ו־Bluetooth דלוק).',
+      NearbyPhase.connecting => 'Bluetooth: נמצא טלפון, מתחבר…',
+      NearbyPhase.connected => 'Bluetooth: מחובר.',
+      NearbyPhase.noPermission => 'Bluetooth: חסרה הרשאת "מכשירים בקרבת מקום". מאשרים אותה בהגדרות של צ\'אט טיסה. אם כבר אישרתם: הגדרות, אפליקציות, Google Play services, הרשאות, "מכשירים בקרבת מקום", לאשר.',
+      NearbyPhase.error => err.contains('8038') || err.contains('8029') || err.contains('8034')
+          ? 'Bluetooth: שירותי Google Play חסרים הרשאה. בהגדרות: אפליקציות, Google Play services, הרשאות, "מכשירים בקרבת מקום": לאשר.'
+          : 'Bluetooth: לא הצליח להתחיל ($err). בודקים ש־Bluetooth דלוק.',
+      NearbyPhase.unsupported => null,
+      NearbyPhase.off => null,
+    };
+  }
+
   Future<void> _stopSession() async {
+    await _stopNearby();
     await c.stopLink();
     if (_isHost) {
       await NativeBridge.stopKeepAlive();
@@ -297,6 +352,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _checkTimer?.cancel();
+    unawaited(_stopNearby());
     _checkLive.dispose();
     _shareSub?.cancel();
     _recTimer?.cancel();
@@ -598,6 +654,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
       case 'network':
         _help();
         break;
+      case 'bt':
+        await c.updateSettings({'nearby': !_nearbyOn});
+        if (_nearbyOn) {
+          await _startNearby();
+        } else {
+          await _stopNearby();
+        }
+        _snack(_nearbyOn ? 'חיבור אוטומטי ב־Bluetooth דלוק' : 'חיבור אוטומטי ב־Bluetooth כבוי');
+        unawaited(_selfCheck());
+        break;
       case 'mode':
         await _setMode(_mode == kModeDirect ? kModeHotspot : kModeDirect);
         _snack(_mode == kModeDirect ? 'עברנו לרשת ישירה' : 'עברנו לנקודה חמה');
@@ -835,6 +901,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
             _mi('seat', Icons.event_seat_rounded, c.mySeat == null ? 'המושב שלי' : 'המושב שלי: ${c.mySeat}'),
             _mi('quick', Icons.bolt_rounded, 'עריכת תשובות מהירות'),
             _mi('export', Icons.ios_share_rounded, 'ייצוא השיחה'),
+            _mi('bt', Icons.bluetooth_rounded, _nearbyOn ? 'כיבוי חיבור אוטומטי ב־Bluetooth' : 'הדלקת חיבור אוטומטי ב־Bluetooth'),
             _mi('theme', Icons.dark_mode_outlined, 'בהיר / כהה'),
             _mi('settings', Icons.settings_outlined, 'הגדרות'),
             if (_isHost && _mode == kModeDirect) _mi('newnet', Icons.wifi_password_rounded, 'רשת עם סיסמה חדשה'),
@@ -849,7 +916,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
       PopupMenuItem(value: v, child: Row(children: [Icon(i, size: 20), const SizedBox(width: 12), Text(t)]));
 
   String _subtitleKey(bool connected) =>
-      '${connected}_${c.peerTyping}_${_hostError != null}_$_starting';
+      '${connected}_${c.linkVia}_${c.peerTyping}_${_hostError != null}_$_starting';
 
   Widget _subtitle(bool connected, ColorScheme cs) {
     TextStyle st(Color col) => TextStyle(fontSize: 13, color: col);
@@ -860,7 +927,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
       ]);
     }
     if (connected) {
-      final parts = <InlineSpan>[TextSpan(text: 'מחובר', style: st(const Color(0xFF16A34A)))];
+      final via = c.linkVia == 'nearby' ? ' · Bluetooth' : (c.linkVia == 'wifi' ? ' · Wi‑Fi' : '');
+      final parts = <InlineSpan>[TextSpan(text: 'מחובר$via', style: st(const Color(0xFF16A34A)))];
       if (c.peerBattery != null) {
         final low = c.peerBattery! <= 20 && c.peerCharging != true;
         parts.add(TextSpan(
