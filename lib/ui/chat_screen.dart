@@ -10,11 +10,13 @@ import 'package:record/record.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../core/chat_controller.dart';
+import '../core/discovery.dart';
 import '../core/link.dart';
 import '../core/protocol.dart';
 import '../core/store.dart';
 import '../platform/native.dart';
 import 'bubbles.dart';
+import 'connect_help.dart';
 import 'network_sheet.dart';
 import 'setup_screen.dart';
 import 'theme.dart';
@@ -52,6 +54,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
   bool get _isHost => c.settings['role'] == 'host';
   GroupInfo? _group;
   String? _hostError;
+  NetCheck? _check;
+  final _checkLive = ValueNotifier<NetCheck?>(null);
+  Timer? _checkTimer;
+  DateTime _lastGroupRestart = DateTime.fromMillisecondsSinceEpoch(0);
+  String get _mode => (c.settings['netMode'] as String?) ?? kModeHotspot;
   bool _starting = false;
   bool _foreground = true;
 
@@ -139,40 +146,136 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
     });
     try {
       if (_isHost) {
-        final err = await NativeBridge.ensureHostPermissions();
-        if (err != null) {
-          setState(() => _hostError = err);
-          return;
-        }
-        var ssid = c.settings['ssid'] as String?;
-        var pass = c.settings['pass'] as String?;
-        if (ssid == null || !NativeBridge.isSimplePassphrase(pass)) {
-          ssid = NativeBridge.generateSsid();
-          pass = NativeBridge.generatePassphrase();
-          await c.updateSettings({'ssid': ssid, 'pass': pass});
-        }
-        try {
-          _group = await NativeBridge.startGroup(ssid, pass!);
-        } on WifiDirectError catch (e) {
-          // Keep the TCP server running anyway: it still works if both phones
-          // share another network (e.g. a regular hotspot as a fallback).
-          setState(() => _hostError = _explain(e));
+        if (_mode == kModeDirect) {
+          final err = await NativeBridge.ensureHostPermissions();
+          if (err != null) {
+            setState(() => _hostError = err);
+            return;
+          }
+          var ssid = c.settings['ssid'] as String?;
+          var pass = c.settings['pass'] as String?;
+          if (ssid == null || !NativeBridge.isSimplePassphrase(pass)) {
+            ssid = NativeBridge.generateSsid();
+            pass = NativeBridge.generatePassphrase();
+            await c.updateSettings({'ssid': ssid, 'pass': pass});
+          }
+          try {
+            _group = await NativeBridge.startGroup(ssid, pass!);
+          } on WifiDirectError catch (e) {
+            // Keep the TCP server running anyway: it still works if both
+            // phones share another network (hotspot, plane Wi‑Fi).
+            setState(() => _hostError = _explain(e));
+          }
+        } else {
+          // Hotspot / shared network: no Wi‑Fi Direct group at all.
+          await NativeBridge.ensureNotificationPermission();
+          try {
+            await NativeBridge.stopGroup();
+          } catch (_) {}
+          _group = null;
         }
         await NativeBridge.startKeepAlive();
-        await c.startLink(role: LinkRole.host);
-        if (mounted && c.linkState != LinkState.connected && _group != null) {
+        // Listens on all interfaces (hotspot, Wi‑Fi, Wi‑Fi Direct) + beacon.
+        await c.startLink(role: LinkRole.host, discover: true);
+        if (mounted && _mode == kModeDirect && c.linkState != LinkState.connected && _group != null) {
           showNetworkSheet(context, _group!);
         }
       } else {
         await c.startLink(
-            role: LinkRole.client, host: (c.settings['hostIp'] as String?) ?? kDefaultHostIp);
+            role: LinkRole.client,
+            host: (c.settings['hostIp'] as String?) ?? kDefaultHostIp,
+            discover: true);
       }
     } catch (e) {
       setState(() => _hostError = 'שגיאה בהפעלה: $e');
     } finally {
       if (mounted) setState(() => _starting = false);
+      _checkTimer?.cancel();
+      _checkTimer = Timer.periodic(const Duration(seconds: 5), (_) => _selfCheck());
+      unawaited(_selfCheck());
     }
   }
+
+  /// Honest status of the network, refreshed every 5 s until connected.
+  Future<void> _selfCheck() async {
+    if (!mounted || _starting) return;
+    if (c.linkState == LinkState.connected) {
+      if (_check != null) setState(() => _check = null);
+      return;
+    }
+    final ips = await localPrivateIPv4();
+    NetCheck chk;
+    if (_isHost && _mode == kModeDirect) {
+      GroupInfo? g;
+      try {
+        g = await NativeBridge.groupInfo();
+      } catch (_) {}
+      if (g == null) {
+        chk = NetCheck(false,
+            'הרשת הישירה לא פעילה כרגע (לא נוצרה או נפלה).${_hostError == null ? ' מנסה להקים אותה שוב.' : ''} נקודה חמה עובדת טוב יותר עם אייפון.',
+            suggestHotspot: true);
+        if (DateTime.now().difference(_lastGroupRestart).inSeconds > 45 && _hostError == null) {
+          _lastGroupRestart = DateTime.now();
+          final ssid = c.settings['ssid'] as String?;
+          final pass = c.settings['pass'] as String?;
+          if (ssid != null && pass != null) {
+            NativeBridge.startGroup(ssid, pass).then((v) {
+              if (mounted) setState(() => _group = v);
+            }, onError: (_) {});
+          }
+        }
+      } else {
+        _group = g;
+        final ch = g.channel;
+        final where = ch == null ? '' : ', ערוץ $ch (${g.on5GHz ? '5GHz' : '2.4GHz'})';
+        if (g.on5GHz) {
+          chk = NetCheck(false, 'הרשת ${g.ssid} פעילה, אבל ב־5GHz$where. ייתכן שהאייפון לא יראה אותה. מומלץ לעבור לנקודה חמה.',
+              suggestHotspot: true);
+        } else if (g.clients > 0) {
+          chk = NetCheck(true, 'טלפון הצטרף לרשת ${g.ssid}$where. עכשיו פותחים בו את צ\'אט טיסה.');
+        } else {
+          chk = NetCheck(true,
+              'הרשת ${g.ssid} פעילה$where, ועוד אף טלפון לא הצטרף. אם היא לא מופיעה באייפון תוך דקה, עוברים לנקודה חמה. יש אייפונים שלא מציגים רשת כזאת.',
+              suggestHotspot: true);
+        }
+      }
+    } else if (_isHost) {
+      Map st = const {};
+      try {
+        st = await NativeBridge.status();
+      } catch (_) {}
+      final addr = ips.isEmpty ? '' : '\nכתובת: \u2066${ips.join('  ')}\u2069';
+      if (st['hotspotOn'] == true) {
+        chk = NetCheck(true, 'הנקודה החמה דלוקה. מחכה שהאייפון יצטרף אליה ויפתח את צ\'אט טיסה.$addr');
+      } else if (ips.isNotEmpty) {
+        chk = NetCheck(true, 'הטלפון מחובר לרשת. אם הטלפון השני באותה רשת, הם יתחברו לבד. אחרת מדליקים נקודה חמה.$addr');
+      } else {
+        chk = const NetCheck(false, 'הנקודה החמה עוד לא דלוקה. מדליקים אותה (אחרי מצב טיסה, אם צריך), ואז האייפון מצטרף.');
+      }
+    } else {
+      if (ips.isEmpty) {
+        chk = const NetCheck(false,
+            'הטלפון הזה לא מחובר לשום רשת Wi‑Fi. מצטרפים בהגדרות ה־Wi‑Fi לנקודה החמה של הטלפון השני, וחוזרים לכאן.');
+      } else {
+        final more = c.failedAttempts >= 3
+            ? ' עדיין לא נמצא: בודקים שצ\'אט טיסה פתוח בטלפון השני ושמדובר באותה רשת. באייפון: הגדרות ← צ\'אט טיסה ← "רשת מקומית" צריך להיות דלוק.'
+            : '';
+        chk = NetCheck(true, 'מחובר לרשת (\u2066${ips.first}\u2069). מחפש את הטלפון השני…$more');
+      }
+    }
+    _checkLive.value = chk;
+    if (mounted) setState(() => _check = chk);
+  }
+
+  Future<void> _setMode(String m) async {
+    await c.updateSettings({'netMode': m});
+    await _stopSession();
+    _group = null;
+    _hostError = null;
+    await _startSession();
+  }
+
+  void _help() => showHostHelp(context, mode: _mode, group: _group, check: _check, live: _checkLive);
 
   String _explain(WifiDirectError e) => switch (e.code) {
         'WIFI_OFF' => 'ה־Wi‑Fi כבוי. מדליקים Wi‑Fi (גם במצב טיסה) ומנסים שוב.',
@@ -193,6 +296,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _checkTimer?.cancel();
+    _checkLive.dispose();
     _shareSub?.cancel();
     _recTimer?.cancel();
     _recorder.dispose();
@@ -491,7 +596,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
   Future<void> _menu(String v) async {
     switch (v) {
       case 'network':
-        if (_group != null) await showNetworkSheet(context, _group!);
+        _help();
+        break;
+      case 'mode':
+        await _setMode(_mode == kModeDirect ? kModeHotspot : kModeDirect);
+        _snack(_mode == kModeDirect ? 'עברנו לרשת ישירה' : 'עברנו לנקודה חמה');
         break;
       case 'seat':
         await _editSeat();
@@ -575,15 +684,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
                       actions: [TextButton(onPressed: _startSession, child: const Text('לנסות שוב'))],
                     ),
                   _ConnectionBanner(
-                    visible: !connected && !_starting && (c.peerLastSeen != null || c.pendingCount > 0),
+                    visible: !connected && !_starting && (c.pendingCount > 0 || (c.peerLastSeen != null && _check == null)),
                     pending: c.pendingCount,
                     isHost: _isHost,
                   ),
+                  if (!connected && _check != null)
+                    NetCheckBanner(
+                      check: _check!,
+                      onHelp: _isHost ? _help : null,
+                      onRetry: _isHost ? () async {
+                        await _stopSession();
+                        await _startSession();
+                      } : null,
+                      onUseHotspot: _isHost && _mode == kModeDirect ? () => _setMode(kModeHotspot) : null,
+                    ),
                   if (!_isHost && !connected && c.peerLastSeen == null) _JoinHint(),
                   Expanded(
                     child: Stack(children: [
                       msgs.isEmpty
-                          ? _EmptyState(isHost: _isHost, group: _group, connected: connected, searching: _searching)
+                          ? _EmptyState(isHost: _isHost, group: _group, connected: connected, searching: _searching, mode: _mode, check: _check)
                           : ListView.builder(
                               controller: _scroll,
                               reverse: true,
@@ -709,13 +828,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
         PopupMenuButton<String>(
           onSelected: _menu,
           itemBuilder: (_) => [
-            if (_isHost && _group != null) _mi('network', Icons.qr_code_2_rounded, 'הרשת (QR וסיסמה)'),
+            if (_isHost) _mi('network', Icons.help_outline_rounded, _mode == kModeDirect ? 'הרשת (QR וסיסמה)' : 'איך מתחברים'),
+            if (_isHost)
+              _mi('mode', Icons.swap_horiz_rounded,
+                  _mode == kModeDirect ? 'מעבר לנקודה חמה (מומלץ)' : 'מעבר לרשת ישירה'),
             _mi('seat', Icons.event_seat_rounded, c.mySeat == null ? 'המושב שלי' : 'המושב שלי: ${c.mySeat}'),
             _mi('quick', Icons.bolt_rounded, 'עריכת תשובות מהירות'),
             _mi('export', Icons.ios_share_rounded, 'ייצוא השיחה'),
             _mi('theme', Icons.dark_mode_outlined, 'בהיר / כהה'),
             _mi('settings', Icons.settings_outlined, 'הגדרות'),
-            if (_isHost) _mi('newnet', Icons.wifi_password_rounded, 'רשת עם סיסמה חדשה'),
+            if (_isHost && _mode == kModeDirect) _mi('newnet', Icons.wifi_password_rounded, 'רשת עם סיסמה חדשה'),
             _mi('clear', Icons.delete_sweep_outlined, 'מחיקת היסטוריה'),
           ],
         ),
@@ -751,7 +873,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, Ti
     }
     if (_starting) return Text('מפעיל…', style: st(cs.onSurfaceVariant));
     if (_hostError != null && _group == null && _isHost) return Text('יש בעיה ברשת, ראו למטה', style: st(cs.error));
-    final waiting = _isHost ? 'הרשת פתוחה, מחכה לחיבור' : 'מחפש את הטלפון השני…';
+    final waiting = _isHost
+        ? (_check != null && !_check!.ok ? 'אין רשת פעילה, ראו למטה' : 'מחכה שהטלפון השני יתחבר')
+        : 'מחפש את הטלפון השני…';
     final seen = c.peerLastSeen == null ? '' : ' · נראה לאחרונה ${hhmm(c.peerLastSeen!)}';
     return Text('$waiting$seen', style: st(cs.onSurfaceVariant), overflow: TextOverflow.ellipsis);
   }
@@ -1085,7 +1209,7 @@ class _ConnectionBanner extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final text = pending > 0
         ? 'אין חיבור כרגע. ${pending == 1 ? 'הודעה אחת ממתינה' : '$pending הודעות ממתינות'} ותישלח${pending == 1 ? '' : 'נה'} לבד כשהחיבור יחזור.'
-        : (isHost ? 'הטלפון השני לא מחובר. הרשת פתוחה והחיבור יחזור לבד.' : 'אין חיבור כרגע. מנסה להתחבר מחדש…');
+        : (isHost ? 'הטלפון השני לא מחובר. החיבור יחזור לבד כשהוא יחזור לרשת.' : 'אין חיבור כרגע. מנסה להתחבר מחדש…');
     return AnimatedSize(
       duration: const Duration(milliseconds: 250),
       curve: Curves.easeOutCubic,
@@ -1142,8 +1266,8 @@ class _JoinHint extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(color: cs.secondaryContainer, borderRadius: BorderRadius.circular(16)),
       child: Text(
-        'כדי להתחבר: מכוונים את המצלמה של הטלפון הזה לקוד שמוצג בטלפון השני ומאשרים את הרשת, '
-        'או בוחרים בהגדרות ה־Wi‑Fi את הרשת שמתחילה ב־DIRECT ומקלידים את 8 הספרות. אחר כך חוזרים לכאן, והחיבור יקרה לבד.',
+        'כדי להתחבר: בהגדרות ה־Wi‑Fi מצטרפים לנקודה החמה של הטלפון השני (או לאותה רשת Wi‑Fi שהוא מחובר אליה), '
+        'וחוזרים לכאן. האפליקציה מוצאת אותו לבד, בלי להקליד כתובת. אם נשאלים על גישה ל"רשת מקומית", מאשרים.',
         style: TextStyle(color: cs.onSecondaryContainer),
       ),
     );
@@ -1151,7 +1275,10 @@ class _JoinHint extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.isHost, required this.group, required this.connected, required this.searching});
+  const _EmptyState({required this.isHost, required this.group, required this.connected, required this.searching,
+      required this.mode, this.check});
+  final String mode;
+  final NetCheck? check;
   final bool isHost;
   final GroupInfo? group;
   final bool connected;
@@ -1161,6 +1288,9 @@ class _EmptyState extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     if (searching) {
       return Center(child: Text('לא נמצאו הודעות', style: TextStyle(color: cs.onSurfaceVariant)));
+    }
+    if (isHost && !connected && mode != kModeDirect) {
+      return ListView(padding: const EdgeInsets.all(16), children: [HotspotCard(check: check)]);
     }
     if (isHost && group != null && !connected) {
       return ListView(padding: const EdgeInsets.all(16), children: [NetworkCard(info: group!, compact: true)]);

@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import '../core/chat_controller.dart';
 import '../core/protocol.dart';
 import '../platform/native.dart';
+import 'connect_help.dart';
 
 class SetupScreen extends StatefulWidget {
   const SetupScreen({super.key, required this.controller, this.editing = false});
@@ -20,12 +21,15 @@ class _SetupScreenState extends State<SetupScreen> {
       TextEditingController(text: widget.controller.settings['hostIp'] as String? ?? kDefaultHostIp);
   late String _role = widget.controller.settings['role'] as String? ??
       (NativeBridge.canHost ? 'host' : 'client');
+  late String _mode = widget.controller.settings['netMode'] as String? ?? kModeHotspot;
+  bool _advanced = false;
 
   Future<void> _save() async {
     final name = _name.text.trim();
     await widget.controller.updateSettings({
       'name': name.isEmpty ? (_role == 'host' ? 'אנדרואיד' : 'אייפון') : name,
       'role': _role,
+      'netMode': _mode,
       'hostIp': _ip.text.trim().isEmpty ? kDefaultHostIp : _ip.text.trim(),
     });
     if (widget.editing && mounted) Navigator.of(context).pop(true);
@@ -69,24 +73,39 @@ class _SetupScreenState extends State<SetupScreen> {
                 selected: _role == 'host',
                 icon: Icons.wifi_tethering_rounded,
                 title: 'יוצר את הרשת',
-                subtitle: 'הטלפון הזה (אנדרואיד) פותח רשת Wi‑Fi קטנה, והטלפון השני מצטרף אליה.',
+                subtitle: 'הטלפון הזה (אנדרואיד) מדליק נקודה חמה, והטלפון השני מצטרף אליה.',
                 onTap: () => setState(() => _role = 'host'),
               ),
             _RoleCard(
               selected: _role == 'client',
               icon: Icons.wifi_rounded,
               title: 'מצטרף לרשת',
-              subtitle: 'קודם מתחברים בהגדרות ה־Wi‑Fi לרשת שהטלפון השני מציג, ואז פותחים את הצ׳אט.',
+              subtitle: 'מצטרפים בהגדרות ה־Wi‑Fi לנקודה החמה של הטלפון השני, ופותחים את הצ׳אט. הוא נמצא לבד.',
               onTap: () => setState(() => _role = 'client'),
             ),
+            if (_role == 'host') ...[
+              const SizedBox(height: 16),
+              Text('איך מחברים את הטלפונים', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              ModeChoice(mode: _mode, onChanged: (m) => setState(() => _mode = m)),
+            ],
             if (_role == 'client') ...[
-              const SizedBox(height: 12),
-              TextField(
-                controller: _ip,
-                textDirection: TextDirection.ltr,
-                keyboardType: TextInputType.url,
-                decoration: const InputDecoration(labelText: 'כתובת הטלפון המארח (בדרך כלל לא משנים)'),
+              const SizedBox(height: 4),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton(
+                  onPressed: () => setState(() => _advanced = !_advanced),
+                  child: Text(_advanced ? 'הסתרת הגדרות מתקדמות' : 'הגדרות מתקדמות'),
+                ),
               ),
+              if (_advanced)
+                TextField(
+                  controller: _ip,
+                  textDirection: TextDirection.ltr,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                      labelText: 'כתובת ידנית של הטלפון השני (לא חובה, נמצא לבד)'),
+                ),
             ],
             const SizedBox(height: 28),
             FilledButton(

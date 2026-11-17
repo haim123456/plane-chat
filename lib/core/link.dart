@@ -22,7 +22,16 @@ class ChatLink {
     this.deadAfter = const Duration(seconds: 14),
     this.retryDelay = const Duration(seconds: 2),
     this.connectTimeout = const Duration(seconds: 5),
+    this.finder,
   });
+
+  /// Client: custom way to reach the host (discovery on any shared network).
+  /// Returns a connected socket or null. When null is set, connects to [host].
+  final Future<Socket?> Function()? finder;
+
+  /// Address of the peer of the current/last connection.
+  String? connectedHost;
+  int failedAttempts = 0;
 
   final LinkRole role;
   final String host;
@@ -98,13 +107,18 @@ class ChatLink {
       if (_socket == null) {
         _setState(LinkState.connecting);
         try {
-          final s = await Socket.connect(host, port, timeout: connectTimeout);
+          final s = finder != null
+              ? await finder!()
+              : await Socket.connect(host, port, timeout: connectTimeout);
+          if (s == null) throw const SocketException('host not found');
           if (!_running) {
             s.destroy();
             break;
           }
+          failedAttempts = 0;
           _adopt(s);
         } catch (_) {
+          failedAttempts++;
           _setState(LinkState.waiting);
         }
       }
@@ -117,6 +131,9 @@ class ChatLink {
     _dropSocket(notify: false);
     s.setOption(SocketOption.tcpNoDelay, true);
     _socket = s;
+    try {
+      connectedHost = s.remoteAddress.address;
+    } catch (_) {}
     _decoder = FrameDecoder();
     _lastRx = DateTime.now();
     _setState(LinkState.connected);

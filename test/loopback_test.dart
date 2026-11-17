@@ -115,4 +115,18 @@ void main() {
     await host.stopLink();
     await client2.stopLink();
   });
+
+  test('discovery mode: client finds host via cached/manual address and remembers it', () async {
+    final port = await freePort();
+    final host = await mk('android');
+    final client = await mk('iphone');
+    await host.startLink(role: LinkRole.host, port: port, discover: true, beaconPort: 47998);
+    await client.startLink(role: LinkRole.client, host: '127.0.0.1', port: port, discover: true, beaconPort: 47998);
+    await waitFor(() => host.linkState == LinkState.connected && client.linkState == LinkState.connected);
+    final t = (await client.sendText('נמצאת'))!;
+    await waitFor(() => t.status == MsgStatus.delivered);
+    await waitFor(() => client.settings['lastHost'] == '127.0.0.1');
+    await host.stopLink();
+    await client.stopLink();
+  });
 }

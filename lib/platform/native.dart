@@ -16,6 +16,18 @@ class GroupInfo {
   final int clients;
   final int? frequency;
 
+  bool get on5GHz => frequency != null && frequency! > 4900;
+
+  /// Wi‑Fi channel number for display (6, 1, 11, 36, 149...).
+  int? get channel {
+    final f = frequency;
+    if (f == null || f <= 0) return null;
+    if (f == 2484) return 14;
+    if (f >= 2412 && f < 2484) return (f - 2407) ~/ 5;
+    if (f >= 5000 && f < 5900) return (f - 5000) ~/ 5;
+    return null;
+  }
+
   static GroupInfo? fromMap(Map? m) {
     if (m == null || m['ssid'] == null) return null;
     return GroupInfo(m['ssid'] as String, (m['passphrase'] as String?) ?? '',
@@ -91,6 +103,16 @@ class NativeBridge {
   static Future<GroupInfo?> groupInfo() async =>
       GroupInfo.fromMap(await _wifi.invokeMethod<Map>('groupInfo'));
   static Future<void> openWifiSettings() => _wifi.invokeMethod('openWifiSettings');
+  /// Opens Android's "Hotspot & tethering" screen (or the closest one).
+  static Future<bool> openHotspotSettings() async =>
+      (await _wifi.invokeMethod<bool>('openHotspotSettings')) ?? false;
+
+  /// Hotspot mode needs no Wi‑Fi Direct permission; just notifications.
+  static Future<void> ensureNotificationPermission() async {
+    if (!Platform.isAndroid) return;
+    if (await sdkInt() >= 33) await Permission.notification.request();
+  }
+
   static Future<void> openLocationSettings() => _wifi.invokeMethod('openLocationSettings');
 
   static Future<void> startKeepAlive() async {

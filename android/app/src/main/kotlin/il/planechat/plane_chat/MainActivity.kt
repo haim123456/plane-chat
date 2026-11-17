@@ -99,10 +99,26 @@ class MainActivity : FlutterActivity() {
                     "locationEnabled" to locOn,
                     "fixedNameSupported" to (Build.VERSION.SDK_INT >= 29),
                     "sdkInt" to Build.VERSION.SDK_INT,
+                    "hotspotOn" to hotspotOn(wifi),
+                    "airplane" to (Settings.Global.getInt(contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) == 1),
                 ))
             }
             "openWifiSettings" -> { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)); result.success(null) }
             "openLocationSettings" -> { startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)); result.success(null) }
+            "openHotspotSettings" -> {
+                // Hotspot & tethering screen; falls back to "Network & internet".
+                val tries = listOf(
+                    Intent().setClassName("com.android.settings", "com.android.settings.TetherSettings"),
+                    Intent("android.settings.TETHER_SETTINGS"),
+                    Intent(Settings.ACTION_WIRELESS_SETTINGS),
+                    Intent(Settings.ACTION_SETTINGS),
+                )
+                var ok = false
+                for (i in tries) {
+                    try { startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); ok = true; break } catch (_: Exception) {}
+                }
+                result.success(ok)
+            }
             "startGroup" -> {
                 val ssid = call.argument<String>("ssid")!!
                 val pass = call.argument<String>("passphrase")!!
@@ -112,8 +128,8 @@ class MainActivity : FlutterActivity() {
                 if (!wifi.isWifiEnabled) { result.error("WIFI_OFF", "Wi-Fi is off", null); return }
                 // Remove any old group first, then create ours.
                 p2p!!.removeGroup(p2pChannel!!, object : WifiP2pManager.ActionListener {
-                    override fun onSuccess() { main.postDelayed({ createGroup(ssid, pass, band2g, result, 0) }, 400) }
-                    override fun onFailure(reason: Int) { createGroup(ssid, pass, band2g, result, 0) }
+                    override fun onSuccess() { main.postDelayed({ createGroup(ssid, pass, band2g, result, 0, 0) }, 400) }
+                    override fun onFailure(reason: Int) { createGroup(ssid, pass, band2g, result, 0, 0) }
                 })
             }
             "stopGroup" -> {
@@ -131,12 +147,28 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun createGroup(ssid: String, pass: String, band2g: Boolean, result: MethodChannel.Result, attempt: Int) {
+    /** Hidden API, but readable on Pixels; null if the phone hides it. */
+    private fun hotspotOn(wifi: WifiManager): Boolean? = try {
+        wifi.javaClass.getMethod("isWifiApEnabled").invoke(wifi) as Boolean
+    } catch (_: Throwable) { null }
+
+    /** 2.4 GHz channels 6, 1, 11: what every phone and iPhone can see. */
+    private val channels24 = intArrayOf(2437, 2412, 2462)
+
+    /**
+     * freqTry 0 = ask for the 2.4 GHz band; 1..3 = force channel 6/1/11.
+     * After the group is up we read its real frequency; if it landed on 5 GHz
+     * (or the band request was ignored) we tear it down and force a channel.
+     */
+    private fun createGroup(ssid: String, pass: String, band2g: Boolean, result: MethodChannel.Result, attempt: Int, freqTry: Int) {
         val listener = object : WifiP2pManager.ActionListener {
-            override fun onSuccess() { waitForGroup(result, 0) }
+            override fun onSuccess() { waitForGroup(ssid, pass, band2g, result, 0, freqTry) }
             override fun onFailure(reason: Int) {
                 if (reason == WifiP2pManager.BUSY && attempt < 4) {
-                    main.postDelayed({ createGroup(ssid, pass, band2g, result, attempt + 1) }, 1000)
+                    main.postDelayed({ createGroup(ssid, pass, band2g, result, attempt + 1, freqTry) }, 1000)
+                } else if (freqTry > 0 && freqTry < channels24.size) {
+                    // This channel was refused; try the next one.
+                    main.postDelayed({ createGroup(ssid, pass, band2g, result, 0, freqTry + 1) }, 600)
                 } else {
                     val name = when (reason) {
                         WifiP2pManager.P2P_UNSUPPORTED -> "P2P_UNSUPPORTED"
@@ -149,24 +181,35 @@ class MainActivity : FlutterActivity() {
             }
         }
         if (Build.VERSION.SDK_INT >= 29) {
-            val cfg = WifiP2pConfig.Builder()
-                .setNetworkName(ssid)
-                .setPassphrase(pass)
-                .setGroupOperatingBand(if (band2g) WifiP2pConfig.GROUP_OWNER_BAND_2GHZ else WifiP2pConfig.GROUP_OWNER_BAND_AUTO)
-                .build()
-            p2p!!.createGroup(p2pChannel!!, cfg, listener)
+            val b = WifiP2pConfig.Builder().setNetworkName(ssid).setPassphrase(pass)
+            if (freqTry == 0) {
+                b.setGroupOperatingBand(if (band2g) WifiP2pConfig.GROUP_OWNER_BAND_2GHZ else WifiP2pConfig.GROUP_OWNER_BAND_AUTO)
+            } else {
+                b.setGroupOperatingFrequency(channels24[freqTry - 1])
+            }
+            p2p!!.createGroup(p2pChannel!!, b.build(), listener)
         } else {
             // Android 9 and older: system picks a random name and password.
             p2p!!.createGroup(p2pChannel!!, listener)
         }
     }
 
-    private fun waitForGroup(result: MethodChannel.Result, attempt: Int) {
+    private fun waitForGroup(ssid: String, pass: String, band2g: Boolean, result: MethodChannel.Result, attempt: Int, freqTry: Int) {
         p2p!!.requestGroupInfo(p2pChannel!!) { g ->
             if (g != null && g.isGroupOwner && g.passphrase != null) {
-                result.success(groupMap(g))
-            } else if (attempt < 12) {
-                main.postDelayed({ waitForGroup(result, attempt + 1) }, 500)
+                val freq = if (Build.VERSION.SDK_INT >= 29) g.frequency else 0
+                val on24 = freq in 2400..2500
+                if (Build.VERSION.SDK_INT >= 29 && band2g && freq > 0 && !on24 && freqTry < channels24.size) {
+                    android.util.Log.w("PlaneChat", "group came up on $freq MHz, forcing 2.4 GHz (try ${freqTry + 1})")
+                    p2p!!.removeGroup(p2pChannel!!, object : WifiP2pManager.ActionListener {
+                        override fun onSuccess() { main.postDelayed({ createGroup(ssid, pass, band2g, result, 0, freqTry + 1) }, 600) }
+                        override fun onFailure(reason: Int) { main.postDelayed({ createGroup(ssid, pass, band2g, result, 0, freqTry + 1) }, 600) }
+                    })
+                } else {
+                    result.success(groupMap(g))
+                }
+            } else if (attempt < 16) {
+                main.postDelayed({ waitForGroup(ssid, pass, band2g, result, attempt + 1, freqTry) }, 500)
             } else {
                 result.error("NO_GROUP", "group did not come up", null)
             }

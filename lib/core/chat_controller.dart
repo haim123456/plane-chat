@@ -6,6 +6,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import 'discovery.dart';
 import 'link.dart';
 import 'protocol.dart';
 import 'store.dart';
@@ -103,8 +104,34 @@ class ChatController extends ChangeNotifier {
     String host = kDefaultHostIp,
     int port = kDefaultPort,
     InternetAddress? bindAddress,
+    bool discover = false,
+    int beaconPort = kBeaconPort,
   }) async {
     await stopLink();
+    Future<Socket?> Function()? finder;
+    if (discover && role == LinkRole.client) {
+      final listener = BeaconListener();
+      await listener.start(port: beaconPort);
+      _beaconListener = listener;
+      var round = 0;
+      finder = () async {
+        final last = settings['lastHost'] as String?;
+        final preferred = <String>[
+          if (last != null) last,
+          if (host != kDefaultHostIp) host,
+          ...listener.recent(),
+        ];
+        // Full sweep every other round, so a wrong cached address can't
+        // block discovery but battery isn't wasted on constant sweeps.
+        final sweep = round++ % 2 == 0;
+        return findHost(port: port, preferred: preferred, sweep: sweep);
+      };
+    }
+    if (discover && role == LinkRole.host) {
+      final b = HostBeacon(name: deviceName, port: port, beaconPort: beaconPort);
+      await b.start();
+      _beacon = b;
+    }
     final l = ChatLink(
       role: role,
       host: host,
@@ -112,12 +139,17 @@ class ChatController extends ChangeNotifier {
       bindAddress: bindAddress,
       deviceName: deviceName,
       deviceId: deviceId,
+      finder: finder,
     );
     link = l;
     _subs.add(l.states.listen((s) {
       final was = linkState;
       linkState = s;
       if (s == LinkState.connected) {
+        final h = l.connectedHost;
+        if (role == LinkRole.client && h != null && h != settings['lastHost']) {
+          updateSettings({'lastHost': h});
+        }
         _markQueuedAsSent();
         sendStatus(force: true);
       } else if (was == LinkState.connected) {
@@ -152,7 +184,17 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
+  BeaconListener? _beaconListener;
+  HostBeacon? _beacon;
+
+  /// Client: how many discovery rounds failed in a row (for UI hints).
+  int get failedAttempts => link?.failedAttempts ?? 0;
+
   Future<void> stopLink() async {
+    _beaconListener?.stop();
+    _beaconListener = null;
+    _beacon?.stop();
+    _beacon = null;
     _statusTimer?.cancel();
     _statusTimer = null;
     for (final s in _subs) {
